@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supersonic S2SQL (Semantic to SQL) 链路演示</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Fira+Code:wght@400;600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-dark: #09090b;
+            --terminal-bg: rgba(15, 23, 42, 0.7);
+            --border-glow: rgba(168, 85, 247, 0.4); /* 紫色调代表语义层 */
+            --primary: #a855f7; /* 紫色主色 */
+            --secondary: #00ff66;
+            --accent: #00f0ff;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-image: 
+                radial-gradient(circle at 50% 0%, rgba(168, 85, 247, 0.15), transparent 50%),
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 100% 100%, 40px 40px, 40px 40px;
+            overflow: hidden;
+        }
+
+        /* --- 终端容器 --- */
+        .terminal-container {
+            width: 90%;
+            max-width: 1000px;
+            height: 85vh;
+            background: var(--terminal-bg);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 40px rgba(168, 85, 247, 0.15);
+            backdrop-filter: blur(16px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* --- STREAMING_CHUNK:设计 Mac 风格终端头部 --- */
+        .terminal-header {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .mac-dots { display: flex; gap: 8px; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; }
+        .dot-red { background: #ff5f56; }
+        .dot-yellow { background: #ffbd2e; }
+        .dot-green { background: #27c93f; }
+
+        .terminal-title {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* --- 按钮样式 --- */
+        .run-btn {
+            background: linear-gradient(135deg, var(--primary), #d946ef);
+            color: #fff;
+            border: none;
+            padding: 8px 24px;
+            border-radius: 20px;
+            font-weight: 800;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(168, 85, 247, 0.4);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .run-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 25px rgba(168, 85, 247, 0.6);
+        }
+        .run-btn:disabled {
+            background: #334155;
+            color: #94a3b8;
+            box-shadow: none;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* --- STREAMING_CHUNK:处理对话消息框样式 --- */
+        .terminal-body {
+            flex-grow: 1;
+            padding: 30px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            scroll-behavior: smooth;
+        }
+        
+        .terminal-body::-webkit-scrollbar { width: 6px; }
+        .terminal-body::-webkit-scrollbar-track { background: transparent; }
+        .terminal-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+
+        .msg-box {
+            max-width: 85%;
+            padding: 16px 20px;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            line-height: 1.6;
+            opacity: 0;
+            transform: translateY(20px);
+            animation: slideUpFade 0.5s ease forwards;
+        }
+
+        @keyframes slideUpFade {
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-msg {
+            align-self: flex-end;
+            background: rgba(0, 240, 255, 0.1);
+            border: 1px solid rgba(0, 240, 255, 0.3);
+            border-bottom-right-radius: 2px;
+            color: #e2e8f0;
+        }
+
+        .agent-msg {
+            align-self: flex-start;
+            background: rgba(168, 85, 247, 0.05);
+            border: 1px solid rgba(168, 85, 247, 0.2);
+            border-top-left-radius: 2px;
+            width: 100%;
+        }
+
+        .system-msg {
+            align-self: center;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px dashed rgba(255,255,255,0.2);
+            width: 100%;
+        }
+
+        /* --- STREAMING_CHUNK:代码高亮与 S2SQL 特效 --- */
+        .sql-block {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-left: 4px solid var(--primary); /* S2SQL的紫边 */
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: 'Fira Code', monospace;
+            font-size: 1rem;
+            overflow-x: auto;
+            position: relative;
+        }
+        .sql-block::before {
+            content: 'S2SQL (Semantic-SQL)';
+            position: absolute;
+            top: 0; right: 0;
+            background: var(--primary);
+            color: #fff;
+            font-size: 0.7rem;
+            font-weight: bold;
+            padding: 3px 10px;
+            border-bottom-left-radius: 8px;
+        }
+        
+        .sql-kw { color: #ff7b72; font-weight: 600; } 
+        .sql-func { color: #d2a8ff; } 
+        .sql-str { color: #a5d6ff; } 
+        .sql-op { color: #79c0ff; } 
+        .sql-semantic { color: #58a6ff; font-weight: 600; text-shadow: 0 0 5px rgba(88,166,255,0.3); } /* 语义字段高亮蓝色 */
+
+        /* 中文语义字段特殊样式（带中括号以区分） */
+        .sql-semantic-zh {
+            color: #58a6ff; 
+            font-weight: 600; 
+            background: rgba(88, 166, 255, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid rgba(88, 166, 255, 0.3);
+            text-shadow: none;
+        }
+
+        /* 状态指示器 */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+        .status-success { background: rgba(0, 255, 102, 0.2); color: var(--secondary); border: 1px solid var(--secondary); }
+        .status-warning { background: rgba(255, 189, 46, 0.2); color: #ffbd2e; border: 1px solid #ffbd2e; }
+
+        .thinking-cursor::after {
+            content: '▌';
+            animation: blink 1s step-start infinite;
+            color: var(--primary);
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+
+    <div class="mb-6 text-center">
+        <h1 class="text-3xl font-bold tracking-wider mb-2" style="color:var(--text-main); text-shadow: 0 0 20px rgba(168,85,247,0.5);">Supersonic S2SQL 语义解析模拟</h1>
+        <p class="text-gray-400">摒弃底层物理表，大模型直连<b class="text-purple-400">业务语义层 (Semantic Layer)</b> 动态演示</p>
+    </div>
+
+    <div class="terminal-container">
+        <div class="terminal-header">
+            <div class="mac-dots">
+                <div class="dot dot-red"></div>
+                <div class="dot dot-yellow"></div>
+                <div class="dot dot-green"></div>
+            </div>
+            <div class="terminal-title">
+                <i class="fa-solid fa-layer-group"></i> Semantic Layer Terminal
+            </div>
+            <button id="runBtn" class="run-btn" onclick="startDemo()">
+                <i class="fa-solid fa-play"></i> 执行演示
+            </button>
+        </div>
+
+        <div class="terminal-body" id="terminalBody">
+            <div class="system-msg" style="margin-top: 20vh; border: none;">
+                <i class="fa-solid fa-brain text-6xl mb-4" style="color: rgba(168,85,247,0.3);"></i>
+                <p class="text-xl">Semantic 语义引擎已就绪。</p>
+                <p class="text-sm mt-2 text-gray-500">点击右上角「执行演示」，查看模型如何使用预定义的“专业术语”生成 S2SQL</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const terminalBody = document.getElementById('terminalBody');
+        const runBtn = document.getElementById('runBtn');
+
+        // 辅助函数：等待与滚动
+        const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+        const scrollToBottom = () => { terminalBody.scrollTop = terminalBody.scrollHeight; };
+
+        // 辅助函数：添加消息节点
+        function appendMessage(type, contentHTML) {
+            const div = document.createElement('div');
+            div.className = `msg-box ${type}`;
+            div.innerHTML = contentHTML;
+            terminalBody.appendChild(div);
+            scrollToBottom();
+            return div;
+        }
+
+        // --- 核心 S2SQL 演示流程 ---
+        async function startDemo() {
+            // 1. 初始化
+            runBtn.disabled = true;
+            runBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 解析中...';
+            terminalBody.innerHTML = ''; 
+
+            // 2. 模拟业务人员输入
+            await sleep(400);
+            appendMessage('user-msg', `
+                <div class="flex items-center gap-3 mb-1 text-sm text-cyan-300">
+                    <i class="fa-solid fa-car-side"></i> 路测数据分析师 (Auto-Driving)
+                </div>
+                <div class="font-bold text-xl tracking-wide">"帮我查一下上个月老掉线的测试车辆编号"</div>
+            `);
+
+            // 3. Agent 语义提取与术语映射
+            await sleep(1000);
+            const thinkingBox = appendMessage('agent-msg', `
+                <div class="flex items-center gap-2 mb-2 text-purple-400 font-bold text-lg">
+                    <i class="fa-solid fa-microchip"></i> 业务语义对齐 (Semantic Schema Matching) <span class="thinking-cursor"></span>
+                </div>
+                <div id="thinking-content" class="text-gray-300"></div>
+            `);
+            
+            const thinkContent = document.getElementById('thinking-content');
+            
+            await sleep(800);
+            thinkContent.innerHTML += `
+                <div class="mt-2 flex items-center">
+                    <i class="fa-solid fa-arrow-right-arrow-left text-purple-500 mr-2"></i> 
+                    时间周期泛化: "上个月" 
+                    <i class="fa-solid fa-arrow-right text-gray-500 mx-3"></i> 
+                    <span class="bg-gray-800 px-3 py-1 rounded border border-gray-600 text-blue-300 font-mono">[系统时间_上个月]</span>
+                </div>`;
+            scrollToBottom();
+            
+            await sleep(1000);
+            thinkContent.innerHTML += `
+                <div class="mt-3 flex items-center">
+                    <i class="fa-solid fa-arrow-right-arrow-left text-purple-500 mr-2"></i> 
+                    模糊语境量化: "老掉线" 
+                    <i class="fa-solid fa-arrow-right text-gray-500 mx-3"></i> 
+                    <span class="bg-gray-800 px-3 py-1 rounded border border-gray-600 text-red-400 font-mono">[车辆_掉线频次] >= 5</span>
+                    <span class="status-badge status-warning ml-3"><i class="fa-solid fa-check"></i> 语义数值化成功</span>
+                </div>`;
+            scrollToBottom();
+
+            await sleep(600);
+            document.querySelector('.thinking-cursor').remove();
+
+            // 4. 生成高度抽象的 S2SQL (使用专业术语)
+            await sleep(1200);
+            appendMessage('agent-msg', `
+                <div class="flex items-center gap-2 mb-2 text-purple-400 font-bold text-lg">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> S2SQL (Semantic-SQL) 生成 
+                    <span class="status-badge status-success">大模型认知负荷 ↓ 50%</span>
+                </div>
+                <div class="text-gray-300 mb-2 leading-relaxed">
+                    大模型 <b class="text-white">无需理解</b> 底层复杂的物理表外键关联与杂乱的英文缩写，只需调用人类预定义的<b class="text-blue-400">中文业务语义字段</b>：
+                </div>
+                <div class="sql-block">
+<span class="sql-kw">SELECT</span> 
+    <span class="sql-semantic-zh">[车辆_唯一标识码]</span>, 
+    <span class="sql-semantic-zh">[车辆_所属测试车队]</span>,
+    <span class="sql-semantic-zh">[车辆_掉线频次]</span>
+<span class="sql-kw">FROM</span> 
+    <span class="sql-semantic-zh">[智能驾驶_车辆路测分析域]</span> <span class="text-gray-500 italic">-- 人为定义的纯逻辑语义域，非底层物理表</span>
+<span class="sql-kw">WHERE</span> 
+    <span class="sql-semantic-zh">[车辆_掉线频次]</span> <span class="sql-op">>=</span> <span class="sql-str">5</span> <span class="text-gray-500 italic">-- "老掉线"已被动态量化为频次阈值</span>
+    <span class="sql-kw">AND</span> <span class="sql-semantic-zh">[时间_分析周期]</span> <span class="sql-op">=</span> <span class="sql-str">'上个月'</span>
+<span class="sql-kw">ORDER BY</span> 
+    <span class="sql-semantic-zh">[车辆_掉线频次]</span> <span class="sql-kw">DESC</span>;
+                </div>
+            `);
+
+            // 5. 引擎底层接管说明
+            await sleep(1800);
+            appendMessage('system-msg', `
+                <div class="bg-black bg-opacity-40 p-5 rounded-lg border border-purple-500/30 text-left">
+                    <div class="flex items-center gap-3 mb-3">
+                        <i class="fa-solid fa-gears text-purple-400 text-2xl"></i>
+                        <span class="text-lg text-white font-bold">底层 Supersonic 语义引擎接管编译</span>
+                    </div>
+                    <p class="text-gray-400 text-sm leading-relaxed mb-3">
+                        此时，大模型的任务已经圆满完成。接下来的脏活累活将交由后端的语义引擎接手：它会自动将上述友好的中文 S2SQL，编译成可能包含数千行代码、跨越多张复杂物理表（如 <code class="text-xs bg-gray-800 px-1 rounded">fct_auto_driving_signal_log_di</code> JOIN <code class="text-xs bg-gray-800 px-1 rounded">dim_test_vehicle_info</code>）的底层原生 SQL 并在数仓中执行。
+                    </p>
+                    <div class="flex justify-between items-center mt-4 border-t border-gray-700 pt-4">
+                        <div>
+                            <div class="text-xs text-gray-500 mb-1">传统 Text2SQL 物理查表</div>
+                            <div class="text-red-400 line-through">极易发生关联错乱 (准确率 < 60%)</div>
+                        </div>
+                        <i class="fa-solid fa-angles-right text-gray-600 text-xl mx-4"></i>
+                        <div class="text-right">
+                            <div class="text-xs text-green-400 mb-1 font-bold">当前 S2SQL 语义查表</div>
+                            <div class="text-green-400 font-bold" style="text-shadow: 0 0 10px rgba(0,255,102,0.3);">逻辑100%对齐 (准确率 85%+)</div>
+                        </div>
+                    </div>
+                </div>
+            `);
+
+            // 6. 恢复按钮
+            await sleep(600);
+            runBtn.disabled = false;
+            runBtn.innerHTML = '<i class="fa-solid fa-rotate-right"></i> 重新演示';
+        }
+    </script>
+</body>
+</html>

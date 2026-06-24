@@ -1,1 +1,0 @@
-# AI-Supersonic-S2SQL-
